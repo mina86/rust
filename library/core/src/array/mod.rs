@@ -299,6 +299,63 @@ impl<'a, T, const N: usize> TryFrom<&'a mut [T]> for &'a mut [T; N] {
     }
 }
 
+/// Tries to create an array ref to `N`-element chunks `&[[T; N]]` from a slice
+/// ref `&[T]`.  Succeeds if `slice.len()` is divisible by `N`.
+///
+/// ```
+/// let bytes: [u8; 4] = [0, 1, 2, 3];
+///
+/// let words = <&[[u8; 2]]>::try_from(&bytes[..]).unwrap();
+/// assert_eq!(&[[0, 1], [2, 3]], words);
+///
+/// assert!(<&[[u8; 3]]>::try_from(&bytes[..]).is_err());
+/// ```
+///
+/// If you want an infallible operation which lets you access reminder of the
+/// array see [`[T]::as_chunks`].
+#[stable(feature = "slice_try_as_chunks", since = "1.666.0")]  // XXX DO NOT SUBMIT
+impl<'a, T, const N: usize> TryFrom<&'a [T]> for &'a [[T; N]] {
+    type Error = TryFromSliceError;
+
+    fn try_from(slice: &'a [T]) -> Result<Self, Self::Error> {
+        let (chunks, remainder) = slice.as_chunks::<N>();
+        if remainder.is_empty() {
+            Ok(chunks)
+        } else {
+            Err(TryFromSliceError(()))
+        }
+    }
+}
+
+/// Tries to create a mutable array ref to `N`-element chunks `&mut [[T; N]]`
+/// from a mutable slice ref `&mut [T]`.  Succeeds if `slice.len()` is divisible
+/// by `N`.
+///
+/// ```
+/// let mut bytes: [u8; 4] = [0, 1, 2, 3];
+///
+/// let words = <&mut [[u8; 2]]>::try_from(&mut bytes[..]).unwrap();
+/// assert_eq!(&[[0, 1], [2, 3]], words);
+///
+/// assert!(<&mut [[u8; 3]]>::try_from(&mut bytes[..]).is_err());
+/// ```
+///
+/// If you want an infallible operation which lets you access reminder of the
+/// array see [`[T]::as_chunks_mut`].
+#[stable(feature = "slice_try_as_chunks", since = "1.666.0")]  // XXX DO NOT SUBMIT
+impl<'a, T, const N: usize> TryFrom<&'a mut [T]> for &'a mut [[T; N]] {
+    type Error = TryFromSliceError;
+
+    fn try_from(slice: &'a mut [T]) -> Result<Self, Self::Error> {
+        let (chunks, remainder) = slice.as_chunks_mut::<N>();
+        if remainder.is_empty() {
+            Ok(chunks)
+        } else {
+            Err(TryFromSliceError(()))
+        }
+    }
+}
+
 /// The hash of an array is the same as that of the corresponding slice,
 /// as required by the `Borrow` implementation.
 ///
