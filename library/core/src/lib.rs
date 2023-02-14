@@ -357,6 +357,7 @@ pub mod sync;
 
 pub mod fmt;
 pub mod hash;
+pub mod pattern;
 pub mod slice;
 pub mod str;
 pub mod time;

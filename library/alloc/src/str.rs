@@ -11,7 +11,7 @@ use core::borrow::{Borrow, BorrowMut};
 use core::iter::FusedIterator;
 use core::mem;
 use core::ptr;
-use core::str::pattern::{DoubleEndedSearcher, Pattern, ReverseSearcher, Searcher};
+use core::pattern::{DoubleEndedSearcher, Pattern, ReverseSearcher, Searcher};
 use core::unicode::conversions;
 
 use crate::borrow::ToOwned;
@@ -20,8 +20,6 @@ use crate::slice::{Concat, Join, SliceIndex};
 use crate::string::String;
 use crate::vec::Vec;
 
-#[stable(feature = "rust1", since = "1.0.0")]
-pub use core::str::pattern;
 #[stable(feature = "encode_utf16", since = "1.8.0")]
 pub use core::str::EncodeUtf16;
 #[stable(feature = "split_ascii_whitespace", since = "1.34.0")]
