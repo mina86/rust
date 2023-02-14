@@ -403,17 +403,17 @@ impl Iterator for nofields {
     }
 }
 
-trait Pattern<'a> {
+trait Pattern<&'a str> {
     type Searcher;
 }
 
 struct CharEqPattern;
 
-impl<'a> Pattern<'a> for CharEqPattern {
+impl<'a> Pattern<&'a str> for CharEqPattern {
     type Searcher = CharEqPattern;
 }
 
-struct CharSearcher<'a>(<CharEqPattern as Pattern<'a>>::Searcher);
+struct CharSearcher<'a>(<CharEqPattern as Pattern<&'a str>>::Searcher);
 
 pub trait Error {}
 
