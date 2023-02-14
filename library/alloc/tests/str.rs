@@ -1879,7 +1879,7 @@ mod pattern {
 
     fn cmp_search_to_vec<'a>(
         rev: bool,
-        pat: impl Pattern<'a, Searcher: ReverseSearcher<'a>>,
+        pat: impl Pattern<&'a str, Searcher: ReverseSearcher<&'a str>>,
         haystack: &'a str,
         right: Vec<SearchStep>,
     ) {
@@ -2143,7 +2143,7 @@ fn different_str_pattern_forwarding_lifetimes() {
 
     fn foo<'a, P>(p: P)
     where
-        for<'b> &'b P: Pattern<'a>,
+        for<'b> &'b P: Pattern<&'a str>,
     {
         for _ in 0..3 {
             "asdf".find(&p);
