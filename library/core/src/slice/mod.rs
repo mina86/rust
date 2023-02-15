@@ -15,6 +15,7 @@ use crate::num::NonZeroUsize;
 use crate::ops::{Bound, FnMut, OneSidedRange, Range, RangeBounds};
 use crate::option::Option;
 use crate::option::Option::{None, Some};
+use crate::pattern::{DoubleEndedSearcher, Pattern, ReverseSearcher, Searcher};
 use crate::ptr;
 use crate::result::Result;
 use crate::result::Result::{Err, Ok};
@@ -40,6 +41,7 @@ mod ascii;
 mod cmp;
 mod index;
 mod iter;
+mod pattern;
 mod raw;
 mod rotate;
 mod specialize;
@@ -2213,13 +2215,17 @@ impl<T> [T] {
         RSplitNMut::new(self.rsplit_mut(pred), n)
     }
 
-    /// Returns `true` if the slice contains an element with the given value.
+    /// Returns `true` if the slice contains given [pattern]; returns `false`
+    /// otherwise.
     ///
-    /// This operation is *O*(*n*).
+    /// This may be used to look for a single element (in which case the
+    /// operation is *O*(*n*)) or with more complex patterns.
     ///
-    /// Note that if you have a sorted slice, [`binary_search`] may be faster.
+    /// Note that if you have a sorted slice and are looking for a single
+    /// element, [`binary_search`] may be faster.
     ///
     /// [`binary_search`]: slice::binary_search
+    /// [pattern]: self::pattern
     ///
     /// # Examples
     ///
@@ -2227,11 +2233,15 @@ impl<T> [T] {
     /// let v = [10, 40, 30];
     /// assert!(v.contains(&30));
     /// assert!(!v.contains(&50));
+    ///
+    /// assert!(v.contains(&[]));
+    /// assert!(v.contains(&[40, 30]));
+    /// assert!(!v.contains(&[30, 40]));
     /// ```
     ///
-    /// If you do not have a `&T`, but some other value that you can compare
-    /// with one (for example, `String` implements `PartialEq<str>`), you can
-    /// use `iter().any`:
+    /// If you’re looking for a single element and don’t have a `&T`, but some
+    /// other value that you can compare with one (for example, `String`
+    /// implements `PartialEq<str>`), you can use `iter().any`:
     ///
     /// ```
     /// let v = [String::from("hello"), String::from("world")]; // slice of `String`
@@ -2241,44 +2251,44 @@ impl<T> [T] {
     #[stable(feature = "rust1", since = "1.0.0")]
     #[inline]
     #[must_use]
-    pub fn contains(&self, x: &T) -> bool
-    where
-        T: PartialEq,
-    {
-        cmp::SliceContains::slice_contains(x, self)
+    pub fn contains<'a, P: Pattern<&'a [T]>>(&'a self, pat: P) -> bool {
+        pat.is_contained_in(self)
     }
 
-    /// Returns `true` if `needle` is a prefix of the slice.
+    /// Returns `true` if given [pattern] matches at the beginning of the slice.
+    ///
+    /// [pattern]: self::pattern
     ///
     /// # Examples
     ///
     /// ```
     /// let v = [10, 40, 30];
+    ///
+    /// assert!(v.starts_with(&[]));
     /// assert!(v.starts_with(&[10]));
     /// assert!(v.starts_with(&[10, 40]));
     /// assert!(!v.starts_with(&[50]));
     /// assert!(!v.starts_with(&[10, 50]));
+    ///
+    /// assert!(v.starts_with(&10));
+    /// assert!(!v.starts_with(&30));
     /// ```
     ///
-    /// Always returns `true` if `needle` is an empty slice:
+    /// Always returns `true` if `pattern` is an empty slice:
     ///
     /// ```
     /// let v = &[10, 40, 30];
-    /// assert!(v.starts_with(&[]));
+    /// assert!(v.ends_with(&[]));
     /// let v: &[u8] = &[];
-    /// assert!(v.starts_with(&[]));
+    /// assert!(v.ends_with(&[]));
     /// ```
     #[stable(feature = "rust1", since = "1.0.0")]
     #[must_use]
-    pub fn starts_with(&self, needle: &[T]) -> bool
-    where
-        T: PartialEq,
-    {
-        let n = needle.len();
-        self.len() >= n && needle == &self[..n]
+    pub fn starts_with<'a, P: Pattern<&'a [T]>>(&'a self, pattern: P) -> bool {
+        pattern.is_prefix_of(self)
     }
 
-    /// Returns `true` if `needle` is a suffix of the slice.
+    /// Returns `true` if given [pattern] matches at the end of the slice.
     ///
     /// # Examples
     ///
@@ -2288,9 +2298,12 @@ impl<T> [T] {
     /// assert!(v.ends_with(&[40, 30]));
     /// assert!(!v.ends_with(&[50]));
     /// assert!(!v.ends_with(&[50, 30]));
+    ///
+    /// assert!(v.ends_with(&30));
+    /// assert!(!v.ends_with(&10));
     /// ```
     ///
-    /// Always returns `true` if `needle` is an empty slice:
+    /// Always returns `true` if `pattern` is an empty slice:
     ///
     /// ```
     /// let v = &[10, 40, 30];
@@ -2300,20 +2313,19 @@ impl<T> [T] {
     /// ```
     #[stable(feature = "rust1", since = "1.0.0")]
     #[must_use]
-    pub fn ends_with(&self, needle: &[T]) -> bool
+    pub fn ends_with<'a, P>(&'a self, pattern: P) -> bool
     where
-        T: PartialEq,
+        P: Pattern<&'a [T], Searcher: ReverseSearcher<&'a [T]>>,
     {
-        let (m, n) = (self.len(), needle.len());
-        m >= n && needle == &self[m - n..]
+        pattern.is_suffix_of(self)
     }
 
-    /// Returns a subslice with the prefix removed.
+    /// Returns a subslice with the prefix [pattern] removed.
     ///
-    /// If the slice starts with `prefix`, returns the subslice after the prefix, wrapped in `Some`.
-    /// If `prefix` is empty, simply returns the original slice.
+    /// If `prefix` matches at the beginning of the slice, returns the subslice
+    /// after the prefix; returns `None` otherwise.
     ///
-    /// If the slice does not start with `prefix`, returns `None`.
+    /// [pattern]: self::pattern
     ///
     /// # Examples
     ///
@@ -2324,34 +2336,22 @@ impl<T> [T] {
     /// assert_eq!(v.strip_prefix(&[50]), None);
     /// assert_eq!(v.strip_prefix(&[10, 50]), None);
     ///
-    /// let prefix : &str = "he";
-    /// assert_eq!(b"hello".strip_prefix(prefix.as_bytes()),
+    /// let prefix: &[u8] = b"he";
+    /// assert_eq!(b"hello".strip_prefix(prefix),
     ///            Some(b"llo".as_ref()));
     /// ```
     #[must_use = "returns the subslice without modifying the original"]
     #[stable(feature = "slice_strip", since = "1.51.0")]
-    pub fn strip_prefix<P: SlicePattern<Item = T> + ?Sized>(&self, prefix: &P) -> Option<&[T]>
-    where
-        T: PartialEq,
-    {
-        // This function will need rewriting if and when SlicePattern becomes more sophisticated.
-        let prefix = prefix.as_slice();
-        let n = prefix.len();
-        if n <= self.len() {
-            let (head, tail) = self.split_at(n);
-            if head == prefix {
-                return Some(tail);
-            }
-        }
-        None
+    pub fn strip_prefix<'a, P: Pattern<&'a [T]>>(&'a self, prefix: P) -> Option<&'a [T]> {
+        prefix.strip_prefix_of(self)
     }
 
-    /// Returns a subslice with the suffix removed.
+    /// Returns a subslice with the suffix [pattern] removed.
     ///
-    /// If the slice ends with `suffix`, returns the subslice before the suffix, wrapped in `Some`.
-    /// If `suffix` is empty, simply returns the original slice.
+    /// If `suffix` matches at the end of the slice, returns the subslice before
+    /// the suffix; returns `None` otherwise.
     ///
-    /// If the slice does not end with `suffix`, returns `None`.
+    /// [pattern]: self::pattern
     ///
     /// # Examples
     ///
@@ -2364,20 +2364,205 @@ impl<T> [T] {
     /// ```
     #[must_use = "returns the subslice without modifying the original"]
     #[stable(feature = "slice_strip", since = "1.51.0")]
-    pub fn strip_suffix<P: SlicePattern<Item = T> + ?Sized>(&self, suffix: &P) -> Option<&[T]>
+    pub fn strip_suffix<'a, P>(&'a self, suffix: P) -> Option<&'a [T]>
     where
-        T: PartialEq,
+        P: Pattern<&'a [T]>,
+        <P as Pattern<&'a [T]>>::Searcher: ReverseSearcher<&'a [T]>,
     {
-        // This function will need rewriting if and when SlicePattern becomes more sophisticated.
-        let suffix = suffix.as_slice();
-        let (len, n) = (self.len(), suffix.len());
-        if n <= len {
-            let (head, tail) = self.split_at(len - n);
-            if tail == suffix {
-                return Some(head);
-            }
+        suffix.strip_suffix_of(self)
+    }
+
+    /// Returns index of the first occurrence of the specified [pattern] in the
+    /// slice.
+    ///
+    /// Returns `None` if the pattern doesn't match anywhere within the slice.
+    ///
+    /// [pattern]: self::pattern
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # #![feature(pattern)]
+    ///
+    /// let nums = &[10, 40, 30, 40];
+    /// assert_eq!(nums.find(&40), Some(1));
+    /// assert_eq!(nums.find(&[40, 30]), Some(1));
+    /// assert_eq!(nums.find(&42), None);
+    ///
+    /// let s = b"The swift brown fox";
+    ///
+    /// assert_eq!(s.find(b"w"), Some(5));
+    /// assert_eq!(s.find(&b'w'), Some(5));
+    /// assert_eq!(s.find(b"swift"), Some(4));
+    /// assert_eq!(s.find(b"slow"), None);
+    /// ```
+    #[unstable(feature = "pattern", issue = "27721")]
+    pub fn find<'a, P: Pattern<&'a [T]>>(&'a self, pattern: P) -> Option<usize> {
+        pattern.into_searcher(self).next_match().map(|(i, _)| i)
+    }
+
+    /// Returns index of the last occurrence of the specified [pattern] in the
+    /// slice.
+    ///
+    /// Returns `None` if the pattern doesn't match anywhere within the slice.
+    ///
+    /// [pattern]: self::pattern
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # #![feature(pattern)]
+    ///
+    /// let nums = &[10, 40, 30, 40];
+    /// assert_eq!(nums.rfind(&40), Some(3));
+    /// assert_eq!(nums.rfind(&[40, 30]), Some(1));
+    /// assert_eq!(nums.rfind(&42), None);
+    ///
+    /// let s = b"The swift brown fox";
+    ///
+    /// assert_eq!(s.rfind(b"w"), Some(13));
+    /// assert_eq!(s.rfind(&b'w'), Some(13));
+    /// assert_eq!(s.rfind(b"swift"), Some(4));
+    /// assert_eq!(s.rfind(b"slow"), None);
+    /// ```
+    #[unstable(feature = "pattern", issue = "27721")]
+    pub fn rfind<'a, P>(&'a self, pat: P) -> Option<usize>
+    where
+        P: Pattern<&'a [T], Searcher: ReverseSearcher<&'a [T]>>,
+    {
+        pat.into_searcher(self).next_match_back().map(|(i, _)| i)
+    }
+
+    /// Splits the slice on the first occurrence of the specified `delimiter`
+    /// [pattern] and returns prefix before delimiter and suffix after delimiter.
+    ///
+    /// Returns `None` if the pattern doesn't match anywhere within the slice.
+    ///
+    /// [pattern]: self::pattern
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # #![feature(pattern)]
+    ///
+    /// let s = b"Durarara";
+    ///
+    /// assert_eq!(s.split_once(b"ra"), Some((&b"Du"[..], &b"rara"[..])));
+    /// assert_eq!(s.split_once(b"!"), None);
+    /// ```
+    ///
+    /// [pattern]: crate::slice::pattern
+    #[unstable(feature = "pattern", issue = "27721")]
+    pub fn split_once<'a, P: Pattern<&'a [T]>>(
+        &'a self,
+        delimiter: P,
+    ) -> Option<(&'a [T], &'a [T])> {
+        let (start, end) = delimiter.into_searcher(self).next_match()?;
+        // SAFETY: `Searcher` is known to return valid indices.
+        unsafe { Some((self.get_unchecked(..start), self.get_unchecked(end..))) }
+    }
+
+    /// Splits the slice on the last occurrence of the specified `delimiter`
+    /// [pattern] and returns prefix before delimiter and suffix after delimiter.
+    ///
+    /// Returns `None` if the pattern doesn't match anywhere within the slice.
+    ///
+    /// [pattern]: self::pattern
+    ///
+    /// # Examples
+    ///
+    /// Simple patterns:
+    ///
+    /// ```
+    /// # #![feature(pattern)]
+    ///
+    /// let s = b"Durarara";
+    ///
+    /// assert_eq!(s.rsplit_once(b"ra"), Some((&b"Durara"[..], &b""[..])));
+    /// assert_eq!(s.rsplit_once(b"!"), None);
+    /// ```
+    ///
+    /// [pattern]: crate::slice::pattern
+    #[unstable(feature = "pattern", issue = "27721")]
+    pub fn rsplit_once<'a, P>(&'a self, delimiter: P) -> Option<(&'a [T], &'a [T])>
+    where
+        P: Pattern<&'a [T], Searcher: ReverseSearcher<&'a [T]>>,
+    {
+        let (start, end) = delimiter.into_searcher(self).next_match_back()?;
+        // SAFETY: `Searcher` is known to return valid indices.
+        unsafe { Some((self.get_unchecked(..start), self.get_unchecked(end..))) }
+    }
+
+    /// Returns a slice with all prefixes and suffixes that match the `pattern`
+    /// repeatedly removed.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # #![feature(slice_pattern, pattern)]
+    ///
+    /// let s = b"111foo1bar111".as_ref();
+    /// assert_eq!(s.trim_matches(&b'1'),          &b"foo1bar"[..]);
+    /// ```
+    #[unstable(feature = "pattern", issue = "27721")]
+    pub fn trim_matches<'a, P>(&'a self, pat: P) -> &'a [T]
+    where
+        P: Pattern<&'a [T], Searcher: DoubleEndedSearcher<&'a [T]>>,
+    {
+        let mut matcher = pat.into_searcher(self);
+        let (start, mut end) = matcher.next_reject().unwrap_or((0, 0));
+        if let Some((_, e)) = matcher.next_reject_back() {
+            end = e;
         }
-        None
+        // SAFETY: `Searcher` is known to return valid indices.
+        unsafe { self.get_unchecked(start..end) }
+    }
+
+    /// Returns a slice with all prefixes that match a [pattern] repeatedly
+    /// removed.
+    ///
+    /// [pattern]: self::pattern
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # #![feature(slice_pattern)]
+    ///
+    /// let s = b"111foo1bar111".as_ref();
+    /// assert_eq!(s.trim_start_matches(&b'1'),          &b"foo1bar111"[..]);
+    /// assert_eq!(s.trim_start_matches(b"11".as_ref()), &b"1foo1bar111"[..]);
+    /// ```
+    #[unstable(feature = "slice_pattern", issue = "56345")]
+    pub fn trim_start_matches<'a, P: Pattern<&'a [T]>>(&'a self, pat: P) -> &'a [T] {
+        let mut matcher = pat.into_searcher(self);
+        let start = matcher.next_reject().map_or(self.len(), |(s, _)| s);
+        // SAFETY: `Searcher` is known to return valid indices.
+        unsafe { self.get_unchecked(start..self.len()) }
+    }
+
+    /// Returns a slice with all suffixes that match a [pattern] repeatedly
+    /// removed.
+    ///
+    /// [pattern]: self::pattern
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # #![feature(slice_pattern)]
+    ///
+    /// let s = b"111foo1bar111".as_ref();
+    /// assert_eq!(s.trim_end_matches(&b'1'),          &b"111foo1bar"[..]);
+    /// assert_eq!(s.trim_end_matches(b"11".as_ref()), &b"111foo1bar1"[..]);
+    /// ```
+    #[unstable(feature = "slice_pattern", issue = "56345")]
+    pub fn trim_end_matches<'a, P>(&'a self, pat: P) -> &'a [T]
+    where
+        P: Pattern<&'a [T], Searcher: ReverseSearcher<&'a [T]>>,
+    {
+        let mut matcher = pat.into_searcher(self);
+        let end = matcher.next_reject_back().map_or(0, |(_, e)| e);
+        // SAFETY: `Searcher` is known to return valid indices.
+        unsafe { self.get_unchecked(0..end) }
     }
 
     /// Binary searches this slice for a given element.
@@ -4412,38 +4597,6 @@ impl<T> const Default for &mut [T] {
     /// Creates a mutable empty slice.
     fn default() -> Self {
         &mut []
-    }
-}
-
-#[unstable(feature = "slice_pattern", reason = "stopgap trait for slice patterns", issue = "56345")]
-/// Patterns in slices - currently, only used by `strip_prefix` and `strip_suffix`.  At a future
-/// point, we hope to generalise `core::str::Pattern` (which at the time of writing is limited to
-/// `str`) to slices, and then this trait will be replaced or abolished.
-pub trait SlicePattern {
-    /// The element type of the slice being matched on.
-    type Item;
-
-    /// Currently, the consumers of `SlicePattern` need a slice.
-    fn as_slice(&self) -> &[Self::Item];
-}
-
-#[stable(feature = "slice_strip", since = "1.51.0")]
-impl<T> SlicePattern for [T] {
-    type Item = T;
-
-    #[inline]
-    fn as_slice(&self) -> &[Self::Item] {
-        self
-    }
-}
-
-#[stable(feature = "slice_strip", since = "1.51.0")]
-impl<T, const N: usize> SlicePattern for [T; N] {
-    type Item = T;
-
-    #[inline]
-    fn as_slice(&self) -> &[Self::Item] {
-        self
     }
 }
 
