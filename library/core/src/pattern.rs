@@ -237,13 +237,7 @@ pub unsafe trait Searcher<H: Haystack> {
     /// `(start_match, end_match)`, where start_match is the index of where
     /// the match begins, and end_match is the index after the end of the match.
     fn next_match(&mut self) -> Option<(H::Cursor, H::Cursor)> {
-        loop {
-            match self.next() {
-                SearchStep::Match(a, b) => return Some((a, b)),
-                SearchStep::Done => return None,
-                _ => continue,
-            }
-        }
+        loop_next::<true, _>(|| self.next())
     }
 
     /// Finds the next [`Reject`][SearchStep::Reject] result. See [`next()`][Searcher::next]
@@ -252,13 +246,7 @@ pub unsafe trait Searcher<H: Haystack> {
     /// Unlike [`next()`][Searcher::next], there is no guarantee that the returned ranges
     /// of this and [`next_match`][Searcher::next_match] will overlap.
     fn next_reject(&mut self) -> Option<(H::Cursor, H::Cursor)> {
-        loop {
-            match self.next() {
-                SearchStep::Reject(a, b) => return Some((a, b)),
-                SearchStep::Done => return None,
-                _ => continue,
-            }
-        }
+        loop_next::<false, _>(|| self.next())
     }
 }
 
@@ -303,25 +291,13 @@ pub unsafe trait ReverseSearcher<H: Haystack>: Searcher<H> {
     /// Finds the next [`Match`][SearchStep::Match] result.
     /// See [`next_back()`][ReverseSearcher::next_back].
     fn next_match_back(&mut self) -> Option<(H::Cursor, H::Cursor)> {
-        loop {
-            match self.next_back() {
-                SearchStep::Match(a, b) => return Some((a, b)),
-                SearchStep::Done => return None,
-                _ => continue,
-            }
-        }
+        loop_next::<true, _>(|| self.next_back())
     }
 
     /// Finds the next [`Reject`][SearchStep::Reject] result.
     /// See [`next_back()`][ReverseSearcher::next_back].
     fn next_reject_back(&mut self) -> Option<(H::Cursor, H::Cursor)> {
-        loop {
-            match self.next_back() {
-                SearchStep::Reject(a, b) => return Some((a, b)),
-                SearchStep::Done => return None,
-                _ => continue,
-            }
-        }
+        loop_next::<false, _>(|| self.next_back())
     }
 }
 
@@ -347,3 +323,19 @@ pub unsafe trait ReverseSearcher<H: Haystack>: Searcher<H> {
 /// the pattern `"aa"` in the haystack `"aaa"` matches as either
 /// `"[aa]a"` or `"a[aa]"`, depending from which side it is searched.
 pub trait DoubleEndedSearcher<H: Haystack>: ReverseSearcher<H> {}
+
+
+/// Calls callback until it returns `SearchStep::Done` or either `Match` or
+/// `Reject` depending no `MATCH` generic argument.
+pub(super) fn loop_next<const MATCH: bool, T>(
+    mut next: impl FnMut() -> SearchStep<T>,
+) -> Option<(T, T)> {
+    loop {
+        match next() {
+            SearchStep::Done => break None,
+            SearchStep::Match(start, end) if MATCH => break Some((start, end)),
+            SearchStep::Reject(start, end) if !MATCH => break Some((start, end)),
+            _ => (),
+        }
+    }
+}
