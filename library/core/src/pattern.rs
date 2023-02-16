@@ -36,6 +36,8 @@
     issue = "27721"
 )]
 
+use crate::marker::PhantomData;
+
 /// A pattern which can be matched against a [`Haystack`].
 ///
 /// A `Pattern<H>` expresses that the implementing type can be used as a pattern
@@ -323,6 +325,24 @@ pub unsafe trait ReverseSearcher<H: Haystack>: Searcher<H> {
 /// the pattern `"aa"` in the haystack `"aaa"` matches as either
 /// `"[aa]a"` or `"a[aa]"`, depending from which side it is searched.
 pub trait DoubleEndedSearcher<H: Haystack>: ReverseSearcher<H> {}
+
+
+/// XXX TODO placeholder
+#[derive(Clone, Debug)]
+pub struct Predicate<T, F>(F, PhantomData<*const T>);
+
+/// XXX TODO placeholder
+pub fn predicate<T, F: FnMut(T) -> bool>(pred: F) -> Predicate<T, F> {
+    Predicate(pred, PhantomData)
+}
+
+impl<T, F: FnMut(T) -> bool> Predicate<T, F> {
+    /// XXX TODO placeholder
+    pub fn test(&mut self, element: T) -> bool { self.0(element) }
+
+    /// XXX TODO placeholder
+    pub fn as_fn(&mut self) -> &mut F { &mut self.0 }
+}
 
 
 /// Calls callback until it returns `SearchStep::Done` or either `Match` or

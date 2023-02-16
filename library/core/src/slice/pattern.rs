@@ -4,7 +4,7 @@
     issue = "27721"
 )]
 
-use crate::pattern::{Haystack, Pattern, SearchStep};
+use crate::pattern::{Haystack, Pattern, Predicate, SearchStep};
 use crate::pattern;
 
 use super::cmp::SliceContains;
@@ -131,16 +131,8 @@ unsafe impl<'hs, 'p, T: PartialEq> pattern::ReverseSearcher<&'hs [T]> for Elemen
 impl<'hs, 'p, T: PartialEq> pattern::DoubleEndedSearcher<&'hs [T]> for ElementSearcher<'hs, 'p, T> {}
 
 /////////////////////////////////////////////////////////////////////////////
-// Impl Pattern for &mut FnMut(&T) and &mut FnMut(T)
+// Impl Pattern for Predicate
 /////////////////////////////////////////////////////////////////////////////
-
-/*
-
-   XXX TODO those don’t actually work because the implementations conflict with
-   implementation for &T.  This is actually kind of a pain.  It may mean that we
-   will need some kind of core::pattern::Pred wrapper.  I think that would work
-   then.
-
 
 /// Pattern implementation for searching for an element matching given
 /// predicate.
@@ -149,92 +141,92 @@ impl<'hs, 'p, T: PartialEq> pattern::DoubleEndedSearcher<&'hs [T]> for ElementSe
 ///
 /// ```
 /// # #![feature(pattern)]
+/// use core::pattern::predicate;
 ///
 /// let nums = &[10, 40, 30, 40];
-/// assert_eq!(nums.find(|n| n % 3 == 0), Some(2));
-/// assert_eq!(nums.find(|n| n % 2 == 1), None);
+/// assert_eq!(nums.find(predicate(|n| n % 3 == 0)), Some(2));
+/// assert_eq!(nums.find(predicate(|n| n % 2 == 1)), None);
 /// ```
-impl<'hs, 'p, T, F: FnMut(&T) -> bool> Pattern<&'hs [T]> for &'p F {
-    type Searcher = PredicateSearcher<'hs, 'p, T, F>;
+impl<'hs, T, F: FnMut(&'hs T) -> bool> Pattern<&'hs [T]> for Predicate<&'hs T, F> {
+    type Searcher = PredicateSearcher<'hs, T, F>;
 
     fn into_searcher(self, haystack: &'hs [T]) -> Self::Searcher {
         Self::Searcher::new(haystack, self)
     }
 
-    fn is_contained_in(self, haystack: &'hs [T]) -> bool {
-        haystack.iter().any(self)
+    fn is_contained_in(mut self, haystack: &'hs [T]) -> bool {
+        haystack.iter().any(|element| self.test(element))
     }
 
-    fn is_prefix_of(self, haystack: &'hs [T]) -> bool {
-        haystack.first().filter(self).is_some()
+    fn is_prefix_of(mut self, haystack: &'hs [T]) -> bool {
+        haystack.first().filter(|element| self.test(element)).is_some()
     }
 
-    fn is_suffix_of(self, haystack: &'hs [T]) -> bool {
-        haystack.last().filter(self).is_some()
+    fn is_suffix_of(mut self, haystack: &'hs [T]) -> bool {
+        haystack.last().filter(|element| self.test(element)).is_some()
     }
 
-    fn strip_prefix_of(self, haystack: &'hs [T]) -> Option<&'hs [T]> {
+    fn strip_prefix_of(mut self, haystack: &'hs [T]) -> Option<&'hs [T]> {
         match haystack.split_first() {
-            Some((first, tail)) if self(first) => Some(tail),
+            Some((first, tail)) if self.test(first) => Some(tail),
             _ => None,
         }
     }
 
-    fn strip_suffix_of(self, haystack: &'hs [T]) -> Option<&'hs [T]> {
+    fn strip_suffix_of(mut self, haystack: &'hs [T]) -> Option<&'hs [T]> {
         match haystack.split_last() {
-            Some((last, head)) if self(last) => Some(head),
+            Some((last, head)) if self.test(last) => Some(head),
             _ => None,
         }
     }
 }
 
-pub struct PredicateSearcher<'hs, 'p, T, F> {
+#[derive(Clone, Debug)]
+pub struct PredicateSearcher<'hs, T, F> {
     /// Haystack we’re searching in.
     haystack: &'hs [T],
     /// Predicate used to match elements.
-    pred: &'p mut F,
+    pred: Predicate<&'hs T, F>,
     /// Internal state of the searcher.
     state: PredicateSearchState,
 }
 
-impl<'hs, 'p, T, F> PredicateSearcher<'hs, 'p, T, F> {
-    fn new(haystack: &'hs [T], pred: &mut F) -> Self {
+impl<'hs, T, F> PredicateSearcher<'hs, T, F> {
+    fn new(haystack: &'hs [T], pred: Predicate<&'hs T, F>) -> Self {
         let state = PredicateSearchState::new(haystack.len());
         Self { haystack, pred, state }
     }
 }
 
-unsafe impl<'hs, 'p, T, F: FnMut(&T) -> bool> pattern::Searcher<&'hs [T]> for PredicateSearcher<'hs, 'p, T, F> {
+unsafe impl<'hs, T, F: FnMut(&'hs T) -> bool> pattern::Searcher<&'hs [T]> for PredicateSearcher<'hs, T, F> {
     fn haystack(&self) -> &'hs [T] { self.haystack }
 
     fn next(&mut self) -> SearchStep<usize> {
-        self.state.next(|idx| self.pred(&self.haystack[idx]))
+        self.state.next(self.haystack, self.pred.as_fn())
     }
 
     fn next_match(&mut self) -> Option<(usize, usize)> {
-        self.state.next_match(|idx| self.pred(&self.haystack[idx]))
+        self.state.next_match(self.haystack, self.pred.as_fn())
     }
 
     fn next_reject(&mut self) -> Option<(usize, usize)> {
-        self.state.next_reject(|idx| self.pred(&self.haystack[idx]))
+        self.state.next_reject(self.haystack, self.pred.as_fn())
     }
 }
 
-unsafe impl<'hs, 'p, T, F: FnMut(&T) -> bool> pattern::ReverseSearcher<&'hs [T]> for PredicateSearcher<'hs, 'p, T, F> {
+unsafe impl<'hs, T, F: FnMut(&'hs T) -> bool> pattern::ReverseSearcher<&'hs [T]> for PredicateSearcher<'hs, T, F> {
     fn next_back(&mut self) -> SearchStep<usize> {
-        self.state.next_back(|idx| self.pred(&self.haystack[idx]))
+        self.state.next_back(self.haystack, self.pred.as_fn())
     }
 
     fn next_match_back(&mut self) -> Option<(usize, usize)> {
-        self.state.next_match_back(|idx| self.pred(&self.haystack[idx]))
+        self.state.next_match_back(self.haystack, self.pred.as_fn())
     }
 
     fn next_reject_back(&mut self) -> Option<(usize, usize)> {
-        self.state.next_reject_back(|idx| self.pred(&self.haystack[idx]))
+        self.state.next_reject_back(self.haystack, self.pred.as_fn())
     }
 }
-
-*/
 
 /////////////////////////////////////////////////////////////////////////////
 // Impl Pattern for &[T] and &[T; N]
@@ -550,8 +542,8 @@ impl PredicateSearchState {
         }
     }
 
-    fn next<T, F>(&mut self, hs: &[T], pred: &mut F) -> SearchStep<usize>
-    where F: FnMut(&T) -> bool,
+    fn next<'hs, T, F>(&mut self, hs: &'hs [T], pred: &mut F) -> SearchStep<usize>
+    where F: FnMut(&'hs T) -> bool,
     {
         if self.start >= self.end {
             return SearchStep::Done;
@@ -573,14 +565,14 @@ impl PredicateSearchState {
         }
     }
 
-    fn next_match<T, F>(&mut self, hs: &[T], pred: &mut F) -> Option<(usize, usize)>
-    where F: FnMut(&T) -> bool,
+    fn next_match<'hs, T, F>(&mut self, hs: &'hs [T], pred: &mut F) -> Option<(usize, usize)>
+    where F: FnMut(&'hs T) -> bool,
     {
         pattern::loop_next::<true, _>(|| self.next(hs, pred))
     }
 
-    fn next_reject<T, F>(&mut self, hs: &[T], pred: &mut F) -> Option<(usize, usize)>
-    where F: FnMut(&T) -> bool,
+    fn next_reject<'hs, T, F>(&mut self, hs: &'hs [T], pred: &mut F) -> Option<(usize, usize)>
+    where F: FnMut(&'hs T) -> bool,
     {
         if self.start >= self.end {
             return None;
@@ -602,8 +594,8 @@ impl PredicateSearchState {
         }
     }
 
-    fn next_back<T, F>(&mut self, hs: &[T], pred: &mut F) -> SearchStep<usize>
-    where F: FnMut(&T) -> bool + Copy,
+    fn next_back<'hs, T, F>(&mut self, hs: &'hs [T], pred: &mut F) -> SearchStep<usize>
+    where F: FnMut(&'hs T) -> bool,
     {
         if self.start >= self.end {
             return SearchStep::Done
@@ -625,14 +617,14 @@ impl PredicateSearchState {
         }
     }
 
-    fn next_match_back<T, F>(&mut self, hs: &[T], pred: &mut F) -> Option<(usize, usize)>
-    where F: FnMut(&T) -> bool + Copy,
+    fn next_match_back<'hs, T, F>(&mut self, hs: &'hs [T], pred: &mut F) -> Option<(usize, usize)>
+    where F: FnMut(&'hs T) -> bool,
     {
         pattern::loop_next::<true, _>(|| self.next_back(hs, pred))
     }
 
-    fn next_reject_back<T, F>(&mut self, hs: &[T], pred: &mut F) -> Option<(usize, usize)>
-    where F: FnMut(&T) -> bool + Copy,
+    fn next_reject_back<'hs, T, F>(&mut self, hs: &'hs [T], pred: &mut F) -> Option<(usize, usize)>
+    where F: FnMut(&'hs T) -> bool,
     {
         if self.start >= self.end {
             return None;
@@ -654,8 +646,8 @@ impl PredicateSearchState {
         }
     }
 
-    fn count<T, F>(&self, want: bool, hs: &[T], pred: &mut F) -> usize
-    where F: FnMut(&T) -> bool,
+    fn count<'hs, T, F>(&self, want: bool, hs: &'hs [T], pred: &mut F) -> usize
+    where F: FnMut(&'hs T) -> bool,
     {
         hs[self.start..self.end]
             .iter()
@@ -664,8 +656,8 @@ impl PredicateSearchState {
             .count()
     }
 
-    fn count_back<T, F>(&self, want: bool, hs: &[T], pred: &mut F) -> usize
-    where F: FnMut(&T) -> bool,
+    fn count_back<'hs, T, F>(&self, want: bool, hs: &'hs [T], pred: &mut F) -> usize
+    where F: FnMut(&'hs T) -> bool,
     {
         hs[self.start..self.end]
             .iter()
