@@ -68,7 +68,7 @@ pub use iter::SplitAsciiWhitespace;
 pub use iter::SplitInclusive;
 
 #[unstable(feature = "str_internals", issue = "none")]
-pub use validations::{next_code_point, utf8_char_width};
+pub use validations::{next_code_point, try_first_code_point, utf8_char_width};
 
 use iter::MatchIndicesInternal;
 use iter::SplitInternal;

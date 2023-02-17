@@ -8,11 +8,13 @@ use crate::fmt;
 use crate::hash::{Hash, Hasher};
 use crate::iter::Extend;
 use crate::ops;
+use crate::pattern::{DoubleEndedSearcher, Pattern, Searcher, SearchStep, ReverseSearcher};
 use crate::rc::Rc;
 use crate::str::FromStr;
 use crate::sync::Arc;
 
 use crate::sys::os_str::{Buf, Slice};
+use crate::sys::os_str_pattern::Slice as Slice2;
 use crate::sys_common::{AsInner, FromInner, IntoInner};
 
 /// A type that can represent owned, mutable platform-native strings, but is
@@ -979,6 +981,82 @@ impl OsStr {
     pub fn eq_ignore_ascii_case<S: AsRef<OsStr>>(&self, other: S) -> bool {
         self.inner.eq_ignore_ascii_case(&other.as_ref().inner)
     }
+
+
+    /// XXX placeholder
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # #![feature(pattern)]
+    /// use std::ffi::OsStr;
+    ///
+    /// assert!(OsStr::new("foo").starts_with('f'));
+    /// assert!(!OsStr::new("foo").starts_with('F'));
+    /// ```
+    #[unstable(feature = "pattern", issue = "27721")]
+    pub fn starts_with<'a, P: Pattern<&'a OsStr>>(&'a self, pat: P) -> bool {
+        pat.is_prefix_of(self)
+    }
+
+    /// XXX placeholder
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # #![feature(pattern)]
+    /// use std::ffi::OsStr;
+    ///
+    /// assert!(OsStr::new("foo").ends_with('o'));
+    /// assert!(!OsStr::new("foo").ends_with('O'));
+    /// ```
+    #[unstable(feature = "pattern", issue = "27721")]
+    pub fn ends_with<'a, P>(&'a self, pat: P) -> bool
+    where P: Pattern<&'a OsStr, Searcher: ReverseSearcher<&'a OsStr>>,
+    {
+        pat.is_suffix_of(self)
+    }
+
+    /// XXX placeholder
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # #![feature(pattern)]
+    /// use std::ffi::OsStr;
+    ///
+    /// assert_eq!(Some(OsSttr::from("oo")), OsStr::new("foo").strip_prefix('f'));
+    /// assert_eq!(None, OsStr::new("foo").strip_prefix('F'));
+    /// ```
+    #[must_use = "this returns the remaining substring as a new slice, \
+                  without modifying the original"]
+    #[unstable(feature = "pattern", issue = "27721")]
+    pub fn strip_prefix<'a, P>(&'a self, prefix: P) -> Option<&'a OsStr>
+    where P: Pattern<&'a OsStr>
+    {
+        prefix.strip_prefix_of(self)
+    }
+
+    /// XXX placeholder
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # #![feature(pattern)]
+    /// use std::ffi::OsStr;
+    ///
+    /// assert_eq!(Some(OsSttr::from("fo")), OsStr::new("foo").strip_suffix('o'));
+    /// assert_eq!(None, OsStr::new("foo").strip_suffix('O'));
+    /// ```
+    #[must_use = "this returns the remaining substring as a new slice, \
+                  without modifying the original"]
+    #[unstable(feature = "pattern", issue = "27721")]
+    pub fn strip_suffix<'a, P>(&'a self, suffix: P) -> Option<&'a OsStr>
+    where P: Pattern<&'a OsStr>,
+          <P as Pattern<&'a OsStr>>::Searcher: ReverseSearcher<&'a OsStr>,
+    {
+        suffix.strip_suffix_of(self)
+    }
 }
 
 #[stable(feature = "box_from_os_str", since = "1.17.0")]
@@ -1446,3 +1524,94 @@ impl<'a> FromIterator<Cow<'a, OsStr>> for OsString {
         }
     }
 }
+
+#[unstable(feature = "pattern", issue = "27721")]
+impl<'hs> crate::pattern::Haystack for &'hs OsStr {
+    type Cursor = usize;
+
+    fn cursor_at_front(&self) -> usize { 0 }
+    fn cursor_at_back(&self) -> usize { self.inner.inner.len() }
+
+    unsafe fn split_at_cursor_unchecked(self, cursor: usize) -> (Self, Self) {
+        let bytes = &self.inner.inner;
+        unsafe {
+            let head = bytes.get_unchecked(..cursor);
+            // XXX
+            let head = core::mem::transmute(head);
+
+            let tail = bytes.get_unchecked(cursor..);
+            // XXX
+            let tail = core::mem::transmute(tail);
+
+            (head, tail)
+        }
+    }
+}
+
+macro_rules! define_pattern {
+    ($pattern:ty) => {
+        #[unstable(feature = "pattern", issue = "27721")]
+        impl<'hs> Pattern<&'hs OsStr> for $pattern {
+            type Searcher = SearcherImpl<<$pattern as Pattern<&'hs Slice2>>::Searcher>;
+
+            fn into_searcher(self, haystack: &'hs OsStr) -> Self::Searcher {
+                let haystack: &'hs Slice2 = unsafe { core::mem::transmute(haystack) };
+                Self::Searcher::new(self.into_searcher(haystack))
+            }
+
+            fn is_contained_in(self, haystack: &'hs OsStr) -> bool {
+                let haystack: &'hs Slice2 = unsafe { core::mem::transmute(haystack) };
+                self.is_contained_in(haystack)
+            }
+
+            fn is_prefix_of(self, haystack: &'hs OsStr) -> bool {
+                let haystack: &'hs Slice2 = unsafe { core::mem::transmute(haystack) };
+                self.is_prefix_of(haystack)
+            }
+
+            fn is_suffix_of(self, haystack: &'hs OsStr) -> bool {
+                let haystack: &'hs Slice2 = unsafe { core::mem::transmute(haystack) };
+                self.is_suffix_of(haystack)
+            }
+
+            fn strip_prefix_of(self, haystack: &'hs OsStr) -> Option<&'hs OsStr> {
+                let haystack: &'hs Slice2 = unsafe { core::mem::transmute(haystack) };
+                self.strip_prefix_of(haystack).map(core::mem::transmute)
+            }
+
+            fn strip_suffix_of(self, haystack: &'hs OsStr) -> Option<&'hs OsStr> {
+                let haystack: &'hs Slice2 = unsafe { core::mem::transmute(haystack) };
+                self.strip_suffix_of(haystack).map(core::mem::transmute)
+            }
+        }
+
+        #[unstable(feature = "pattern", issue = "27721")]
+            pub struct SearcherImpl<S>(S);
+
+        #[unstable(feature = "pattern", issue = "27721")]
+        unsafe impl<'hs, S> Searcher<&'hs OsStr> for SearcherImpl<S>
+        where S: Searcher<&'hs Slice2>
+        {
+            fn haystack(&self) -> &'hs OsStr { core::mem::transmute(self.0.haystack()) }
+
+            fn next(&mut self) -> SearchStep<usize> { self.0.next() }
+            fn next_match(&mut self) -> Option<(usize, usize)> { self.0.next_match() }
+            fn next_reject(&mut self) -> Option<(usize, usize)> { self.0.next_reject() }
+        }
+
+        #[unstable(feature = "pattern", issue = "27721")]
+        unsafe impl<'hs, S> ReverseSearcher<&'hs OsStr> for SearcherImpl<S>
+        where S: ReverseSearcher<&'hs Slice2>
+        {
+            fn next_back(&mut self) -> SearchStep<usize> { self.0.next_back() }
+            fn next_match_back(&mut self) -> Option<(usize, usize)> { self.0.next_match_back() }
+            fn next_reject_back(&mut self) -> Option<(usize, usize)> { self.0.next_reject_back() }
+        }
+
+        #[unstable(feature = "pattern", issue = "27721")]
+        impl<'hs, S> DoubleEndedSearcher<&'hs OsStr> for SearcherImpl<S>
+        where S: DoubleEndedSearcher<&'hs Slice2> {}
+    }
+}
+
+define_pattern!(char);

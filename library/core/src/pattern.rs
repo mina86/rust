@@ -89,6 +89,7 @@ use crate::marker::PhantomData;
 /// assert_eq!("abcdef_z".find(|ch| ch > 'd' && ch < 'y'), Some(4));
 /// assert_eq!("abcddd_z".find(|ch| ch > 'd' && ch < 'y'), None);
 /// ```
+#[rustc_has_incoherent_inherent_impls]
 pub trait Pattern<H: Haystack>: Sized {
     /// Associated searcher for this pattern
     type Searcher: Searcher<H>;

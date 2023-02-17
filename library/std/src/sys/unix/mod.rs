@@ -31,6 +31,7 @@ pub mod net;
 pub use self::l4re::net;
 pub mod os;
 pub mod os_str;
+pub mod os_str_pattern;
 pub mod path;
 pub mod pipe;
 pub mod process;
