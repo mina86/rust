@@ -1,3 +1,39 @@
+//! [The Pattern API] implementation for searching in `&[T]`.
+//!
+//! The implementation provides generic mechanism for using different pattern
+//! types when searching through a slice.  Although this API is unstable, it is
+//! exposed via stable APIs on the [`&[T]`] type.
+//!
+//! Depending on the type of the pattern, the behaviour of methods like
+//! [`[T]::find`] and [`[T]::contains`] can change. The table below describes
+//! some of those behaviours.
+//!
+//! | Pattern type             | Match condition       |
+//! |--------------------------|-----------------------|
+//! | `&T`                     | is contained in slice |
+//! | `&[T]`                   | is subslice           |
+//! | `&[T; N]`                | is subslice           |
+//! | `&Vec<T>`                | is subslice           |
+//!
+//! Beware that slice patterns over a `&[T]` [haystack] perform an ‘is subslice’
+//! match rather than ‘does any of characters equal’ match.  This may be
+//! confusing since syntax for both is somewhat similar.  For example:
+//!
+//! ```
+//! # #![feature(pattern)]
+//!
+//! let haystack: &str = "Quick brown fox";
+//! assert_eq!(haystack.find(&['u', 'x']), Some(1));
+//!     // haystack matches `‘u’ or ‘x’` on first position.
+//!
+//! let haystack: &[u8] = b"Quick brown fox";
+//! assert_eq!(haystack.find(&[b'u', b'x']), None);
+//!     // haystack doesn’t contain `‘ux’` subslice.
+//! ```
+//!
+//! [The Pattern API]: crate::pattern
+//! [haystack][crate::pattern::Haystack]
+
 #![unstable(
     feature = "slice_pattern",
     reason = "API not fully fleshed out and ready to be stabilized",
@@ -89,6 +125,48 @@ impl<'hs, 'p, T: PartialEq> Pattern<&'hs [T]> for &'p T {
     }
 }
 
+/// Pattern implementation for searching for an element in a slice.
+///
+/// The pattern matches a single element in a slice.
+///
+/// # Examples
+///
+/// ```
+/// # #![feature(pattern)]
+///
+/// let nums = &[10, 40, 30, 40];
+/// assert_eq!(nums.find(&40), Some(1));
+/// assert_eq!(nums.find(&42), None);
+/// ```
+impl<'hs, 'o, 'p, T: PartialEq> Pattern<&'hs [T]> for &'o &'p T {
+    type Searcher = ElementSearcher<'hs, 'p, T>;
+
+    fn into_searcher(self, haystack: &'hs [T]) -> Self::Searcher {
+        (*self).into_searcher(haystack)
+    }
+
+    fn is_contained_in(self, haystack: &'hs [T]) -> bool {
+        (*self).is_contained_in(haystack)
+    }
+
+    fn is_prefix_of(self, haystack: &'hs [T]) -> bool {
+        (*self).is_prefix_of(haystack)
+    }
+
+    fn is_suffix_of(self, haystack: &'hs [T]) -> bool {
+        (*self).is_suffix_of(haystack)
+    }
+
+    fn strip_prefix_of(self, haystack: &'hs [T]) -> Option<&'hs [T]> {
+        (*self).strip_prefix_of(haystack)
+    }
+
+    fn strip_suffix_of(self, haystack: &'hs [T]) -> Option<&'hs [T]> {
+        (*self).strip_suffix_of(haystack)
+    }
+}
+
+/// Associated type for `<&[T] as Pattern>::Searcher`.
 #[derive(Clone, Debug)]
 pub struct ElementSearcher<'hs, 'p, T> {
     haystack: &'hs [T],
@@ -143,10 +221,6 @@ impl<'hs, 'p, T: PartialEq> pattern::DoubleEndedSearcher<&'hs [T]> for ElementSe
 /// The pattern matches a subslice of a larger slice.  An empty pattern matches
 /// around every element in a slice (including at the beginning and end of the
 /// slice).
-///
-/// Note: Other than with slice patterns matching `str`, this pattern matches
-/// a subslice rather than a single element of haystack being equal to element
-/// of the pattern.
 ///
 /// # Examples
 ///
@@ -219,54 +293,111 @@ impl<'hs, 'p, T: PartialEq> Pattern<&'hs [T]> for &'p [T] {
     }
 }
 
-/// Pattern implementation for searching a subslice in a slice.
-///
-/// This is identical to a slice pattern: the pattern matches a subslice of
-/// a larger slice.  An empty array matches around every element in a slice
-/// (including at the beginning and end of the slice).
-///
-/// Note: Other than with slice patterns matching `str`, this pattern matches
-/// a subslice rather than a single element of haystack being equal to element
-/// of the pattern.
-///
-/// # Examples
-///
-/// ```
-/// # #![feature(pattern)]
-///
-/// let slice: &[u8] = b"The quick brown fox";
-/// assert_eq!(slice.find(b"quick"), Some(4));
-/// assert_eq!(slice.find(b"slow"), None);
-/// assert_eq!(slice.find(b""), Some(0));
-/// ```
-impl<'hs, 'p, T: PartialEq, const N: usize> Pattern<&'hs [T]> for &'p [T; N] {
-    type Searcher = SliceSearcher<'hs, 'p, T>;
+/// Implements `Pattern<&'hs [T]>` for given type `$pattern` which must
+/// implement `Index<RangeFull>` which converts the type into `&[T]` pattern.
+#[macro_export]
+#[unstable(feature = "slice_pattern_internals", issue = "none")]
+macro_rules! impl_subslice_pattern {
+    (
+        $(#[$meta:meta])*
+        ($($bounds:tt)*) for $pattern:ty
+    ) => {
+        $(#[$meta])*
+        impl<'hs, $($bounds)*, T: $crate::cmp::PartialEq> $crate::pattern::Pattern<&'hs [T]> for $pattern {
+            type Searcher = $crate::slice::pattern::SliceSearcher<'hs, 'p, T>;
 
-    fn into_searcher(self, haystack: &'hs [T]) -> SliceSearcher<'hs, 'p, T> {
-        SliceSearcher::new(haystack, &self[..])
-    }
+            fn into_searcher(self, haystack: &'hs [T]) -> Self::Searcher {
+                <&[T]>::into_searcher(&self[..], haystack)
+            }
 
-    fn is_contained_in(self, haystack: &'hs [T]) -> bool {
-        (&self[..]).is_contained_in(haystack)
-    }
+            fn is_contained_in(self, haystack: &'hs [T]) -> bool {
+                <&[T]>::is_contained_in(&self[..], haystack)
+            }
 
-    fn is_prefix_of(self, haystack: &'hs [T]) -> bool {
-        (&self[..]).is_prefix_of(haystack)
-    }
-    fn strip_prefix_of(self, haystack: &'hs [T]) -> Option<&'hs [T]> {
-        (&self[..]).strip_prefix_of(haystack)
-    }
+            fn is_prefix_of(self, haystack: &'hs [T]) -> bool {
+                <&[T]>::is_prefix_of(&self[..], haystack)
+            }
+            fn strip_prefix_of(self, haystack: &'hs [T]) -> $crate::option::Option<&'hs [T]> {
+                <&[T]>::strip_prefix_of(&self[..], haystack)
+            }
 
-    fn is_suffix_of(self, haystack: &'hs [T]) -> bool {
-        (&self[..]).is_suffix_of(haystack)
-    }
-    fn strip_suffix_of(self, haystack: &'hs [T]) -> Option<&'hs [T]> {
-        (&self[..]).strip_suffix_of(haystack)
+            fn is_suffix_of(self, haystack: &'hs [T]) -> bool {
+                <&[T]>::is_suffix_of(&self[..], haystack)
+            }
+            fn strip_suffix_of(self, haystack: &'hs [T]) -> $crate::option::Option<&'hs [T]> {
+                <&[T]>::strip_suffix_of(&self[..], haystack)
+            }
+        }
     }
 }
 
-#[derive(Clone, Debug)]
+pub use impl_subslice_pattern;
+
+impl_subslice_pattern! {
+    /// Pattern implementation for searching a subslice in a slice.
+    ///
+    /// This is identical to a slice pattern: the pattern matches a subslice of
+    /// a larger slice.  An empty array matches around every character in a slice.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # #![feature(pattern)]
+    ///
+    /// let slice: &[u8] = b"The quick brown fox";
+    /// assert_eq!(slice.find(b"quick"), Some(4));
+    /// assert_eq!(slice.find(b"slow"), None);
+    /// assert_eq!(slice.find(b""), Some(0));
+    /// ```
+    ('p, const N: usize) for &'p [T; N]
+}
+
+impl_subslice_pattern! {
+    /// Pattern implementation for searching a subslice in a slice.
+    ///
+    /// This is identical to a slice pattern: the pattern matches a subslice of
+    /// a larger slice.  An empty array matches around every character in a slice.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # #![feature(pattern)]
+    ///
+    /// let slice: &[u8] = b"The quick brown fox";
+    ///
+    /// let pattern: &[u8] = b"quick";
+    /// assert_eq!(slice.find(&pattern), Some(4));
+    ///
+    /// let pattern: &[u8] = b"slow";
+    /// assert_eq!(slice.find(&pattern), None);
+    ///
+    /// let pattern: &[u8] = b"";
+    /// assert_eq!(slice.find(&pattern), Some(0));
+    /// ```
+    ('o, 'p) for &'o &'p [T]
+}
+
+impl_subslice_pattern! {
+    /// Pattern implementation for searching a subslice in a slice.
+    ///
+    /// This is identical to a slice pattern: the pattern matches a subslice of
+    /// a larger slice.  An empty array matches around every character in a slice.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # #![feature(pattern)]
+    ///
+    /// let slice: &[u8] = b"The quick brown fox";
+    /// assert_eq!(slice.find(&b"quick"), Some(4));
+    /// assert_eq!(slice.find(&b"slow"), None);
+    /// assert_eq!(slice.find(&b""), Some(0));
+    /// ```
+    ('o, 'p, const N: usize) for &'o &'p [T; N]
+}
+
 /// Associated type for `<&'p [T] as Pattern<&'hs [T]>>::Searcher`.
+#[derive(Clone, Debug)]
 pub struct SliceSearcher<'hs, 'p, T> {
     haystack: &'hs [T],
     state: SearcherState<'p, T>,
@@ -388,7 +519,7 @@ impl<'hs, T: PartialEq> Needle<'hs, T> for &[T] {
 impl<N> NeedleSearcherState<N> {
     /// Creates a new object searching for a `needle` in a haystack of given
     /// length.
-    fn new(haystack_length: usize, needle: N) -> Self {
+    pub fn new(haystack_length: usize, needle: N) -> Self {
         Self { needle, start: 0, end: haystack_length, is_match_fwd: false, is_match_bwd: false }
     }
 
@@ -398,7 +529,7 @@ impl<N> NeedleSearcherState<N> {
     /// reject will be longest possible reject, i.e. it’s going to end either at
     /// the start of following match or at the end of the yet-unexamined portion
     /// of the haystack.
-    fn next_fwd<'hs, R, T>(&mut self, hs: &'hs [T]) -> R
+    pub fn next_fwd<'hs, R, T>(&mut self, hs: &'hs [T]) -> R
     where
         N: Needle<'hs, T>,
         R: pattern::SearchResult,
@@ -471,7 +602,7 @@ impl<N> NeedleSearcherState<N> {
     /// reject will be longest possible reject, i.e. it’s going to start either
     /// at the end of preceding match or at the of the start of the
     /// yet-unexamined portion of the haystack.
-    fn next_bwd<'hs, R, T>(&mut self, hs: &'hs [T]) -> R
+    pub fn next_bwd<'hs, R, T>(&mut self, hs: &'hs [T]) -> R
     where
         N: Needle<'hs, T>,
         R: pattern::SearchResult,

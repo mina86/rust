@@ -3272,3 +3272,27 @@ impl<T, A: Allocator, const N: usize> TryFrom<Vec<T, A>> for [T; N] {
         Ok(array)
     }
 }
+
+core::slice::pattern::impl_subslice_pattern! {
+    /// Pattern implementation for searching a `Vec` in a slice.
+    ///
+    /// This is identical to a slice pattern: the pattern matches a subslice of
+    /// a larger slice.  An empty array matches around every character in a slice.
+    ///
+    /// Note: Other than with slice patterns matching `str`, this pattern matches
+    /// a subslice rather than a single element of haystack being equal to element
+    /// of the pattern.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # #![feature(pattern)]
+    ///
+    /// let slice: &[u8] = b"The quick brown fox";
+    /// assert_eq!(slice.find(b"quick"), Some(4));
+    /// assert_eq!(slice.find(b"slow"), None);
+    /// assert_eq!(slice.find(b""), Some(0));
+    /// ```
+    #[unstable(feature = "pattern", issue = "27721")]
+    ('p) for &'p Vec<T>
+}

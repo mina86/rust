@@ -41,7 +41,7 @@ mod ascii;
 mod cmp;
 mod index;
 mod iter;
-mod pattern;
+pub mod pattern;
 mod raw;
 mod rotate;
 mod specialize;

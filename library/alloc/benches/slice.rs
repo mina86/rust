@@ -61,13 +61,13 @@ fn push(b: &mut Bencher) {
 #[bench]
 fn starts_with_same_vector(b: &mut Bencher) {
     let vec: Vec<_> = (0..100).collect();
-    b.iter(|| vec.starts_with(&*vec))
+    b.iter(|| vec.starts_with(&vec))
 }
 
 #[bench]
 fn starts_with_single_element(b: &mut Bencher) {
     let vec: Vec<_> = vec![0];
-    b.iter(|| vec.starts_with(&*vec))
+    b.iter(|| vec.starts_with(&vec))
 }
 
 #[bench]
@@ -75,19 +75,19 @@ fn starts_with_diff_one_element_at_end(b: &mut Bencher) {
     let vec: Vec<_> = (0..100).collect();
     let mut match_vec: Vec<_> = (0..99).collect();
     match_vec.push(0);
-    b.iter(|| vec.starts_with(&*match_vec))
+    b.iter(|| vec.starts_with(&match_vec))
 }
 
 #[bench]
 fn ends_with_same_vector(b: &mut Bencher) {
     let vec: Vec<_> = (0..100).collect();
-    b.iter(|| vec.ends_with(&*vec))
+    b.iter(|| vec.ends_with(&vec))
 }
 
 #[bench]
 fn ends_with_single_element(b: &mut Bencher) {
     let vec: Vec<_> = vec![0];
-    b.iter(|| vec.ends_with(&*vec))
+    b.iter(|| vec.ends_with(&vec))
 }
 
 #[bench]
@@ -95,7 +95,7 @@ fn ends_with_diff_one_element_at_beginning(b: &mut Bencher) {
     let vec: Vec<_> = (0..100).collect();
     let mut match_vec: Vec<_> = (0..100).collect();
     match_vec[0] = 200;
-    b.iter(|| vec.starts_with(&*match_vec))
+    b.iter(|| vec.starts_with(&match_vec))
 }
 
 #[bench]

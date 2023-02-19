@@ -168,6 +168,8 @@
 #![feature(ptr_alignment_type)]
 #![feature(ptr_metadata)]
 #![feature(set_ptr_value)]
+#![feature(slice_pattern)]
+#![feature(slice_pattern_internals)]
 #![feature(slice_ptr_get)]
 #![feature(slice_split_at_unchecked)]
 #![feature(str_internals)]
