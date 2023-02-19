@@ -580,7 +580,7 @@ impl EmptySearcherState {
 ///
 /// The state accepts generic [`Needle`] `N` as a pattern to be searched.
 #[derive(Clone, Debug)]
-struct NeedleSearcherState<N> {
+pub struct NeedleSearcherState<N> {
     needle: N,
     start: usize,
     end: usize,
@@ -589,7 +589,7 @@ struct NeedleSearcherState<N> {
 }
 
 /// A fixed-length needle which can be searched in a slice.
-trait Needle<'hs, T> {
+pub trait Needle<'hs, T> {
     /// Returns length of the needle.  Must be positive.
     fn len(&self) -> usize;
 
@@ -645,7 +645,12 @@ impl<N> NeedleSearcherState<N> {
         R: pattern::SearchResult,
     {
         if R::USE_EARLY_REJECT {
-            return self.next_reject_fwd(hs).map_or(R::DONE, |(s, e)| R::rejecting(s, e).unwrap());
+            return self
+                .next_reject_fwd(hs, |_| {
+                    // SAFETY: 1 ≠ 0
+                    unsafe { core::num::NonZeroUsize::new_unchecked(1) }
+                })
+                .map_or(R::DONE, |(s, e)| R::rejecting(s, e).unwrap());
         }
 
         let needle_len = self.needle.len();
@@ -686,9 +691,20 @@ impl<N> NeedleSearcherState<N> {
     /// will return shortest possible region.  This is based on the assumption
     /// that if user asks for the next reject they are really interested in
     /// where continuous series of matches ends.
-    fn next_reject_fwd<'hs, T>(&mut self, hs: &'hs [T]) -> Option<(usize, usize)>
+    ///
+    /// `reject_width` returns width of a reject at the start of the slice
+    /// passed to it.  If slice has unstructured data, this may simply return
+    /// one.  However, if slice is for example UTF-8 encoded string, the
+    /// callback must calculate width such that end of the reject doesn’t break
+    /// the encoding.
+    pub(crate) fn next_reject_fwd<'hs, T, F>(
+        &mut self,
+        hs: &'hs [T],
+        reject_width: F,
+    ) -> Option<(usize, usize)>
     where
         N: Needle<'hs, T>,
+        F: FnOnce(&'hs [T]) -> core::num::NonZeroUsize,
     {
         let needle_len = self.needle.len();
         if take(&mut self.is_match_fwd) && self.start < self.end {
@@ -697,8 +713,12 @@ impl<N> NeedleSearcherState<N> {
         if let Some(n) =
             hs[self.start..self.end].chunks(needle_len).position(|slice| !self.needle.test(slice))
         {
-            self.start += n * needle_len + 1;
-            Some((self.start - 1, self.start))
+            self.start += n * needle_len;
+            let width = reject_width(&hs[self.start..self.end]).get();
+            debug_assert!(width <= self.end - self.start);
+            let pos = self.start;
+            self.start += width;
+            Some((pos, self.start))
         } else {
             let tail_len = (self.end - self.start) % needle_len;
             self.start = self.end;
@@ -718,7 +738,12 @@ impl<N> NeedleSearcherState<N> {
         R: pattern::SearchResult,
     {
         if R::USE_EARLY_REJECT {
-            return self.next_reject_bwd(hs).map_or(R::DONE, |(s, e)| R::rejecting(s, e).unwrap());
+            return self
+                .next_reject_bwd(hs, |_| {
+                    // SAFETY: 1 ≠ 0
+                    unsafe { core::num::NonZeroUsize::new_unchecked(1) }
+                })
+                .map_or(R::DONE, |(s, e)| R::rejecting(s, e).unwrap());
         }
 
         let needle_len = self.needle.len();
@@ -761,9 +786,19 @@ impl<N> NeedleSearcherState<N> {
     /// will return shortest possible region.  This is based on the assumption
     /// that if user asks for the next reject they are really interested in
     /// where continuous series of matches ends.
-    fn next_reject_bwd<'hs, T>(&mut self, hs: &'hs [T]) -> Option<(usize, usize)>
+    ///
+    /// `reject_width` returns width of a reject at the end of the slice passed
+    /// to it.  If slice has unstructured data, this may simply return one.
+    /// However, if slice is for example UTF-8 encoded string, the callback must
+    /// calculate width such that end of the reject doesn’t break the encoding.
+    pub(crate) fn next_reject_bwd<'hs, T, F>(
+        &mut self,
+        hs: &'hs [T],
+        reject_width: F,
+    ) -> Option<(usize, usize)>
     where
         N: Needle<'hs, T>,
+        F: FnOnce(&'hs [T]) -> core::num::NonZeroUsize,
     {
         let needle_len = self.needle.len();
         if take(&mut self.is_match_bwd) && self.start < self.end {
@@ -772,8 +807,11 @@ impl<N> NeedleSearcherState<N> {
         if let Some(n) =
             hs[self.start..self.end].rchunks(needle_len).position(|slice| !self.needle.test(slice))
         {
-            self.end -= n * needle_len + 1;
-            Some((self.end, self.end + 1))
+            self.end -= n * needle_len;
+            let width = reject_width(&hs[self.start..self.end]).get();
+            let pos = self.end;
+            self.end -= width;
+            Some((self.end, pos))
         } else {
             let tail_len = (self.end - self.start) % needle_len;
             self.end = self.start;
