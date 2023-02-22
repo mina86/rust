@@ -42,7 +42,7 @@
 
 use crate::mem::{replace, take};
 use crate::pattern;
-use crate::pattern::{Haystack, MatchOnly, Pattern, RejectOnly};
+use crate::pattern::{Haystack, MatchOnly, Pattern, Predicate, RejectOnly};
 
 use super::cmp::SliceContains;
 
@@ -211,6 +211,107 @@ unsafe impl<'hs, 'p, T: PartialEq> pattern::ReverseSearcher<&'hs [T]>
 }
 
 impl<'hs, 'p, T: PartialEq> pattern::DoubleEndedSearcher<&'hs [T]> for ElementSearcher<'hs, 'p, T> {}
+
+/////////////////////////////////////////////////////////////////////////////
+// Impl Pattern for a Predicate
+/////////////////////////////////////////////////////////////////////////////
+
+/// Pattern implementation for searching for an element matching given
+/// predicate.
+///
+/// # Examples
+///
+/// ```
+/// # #![feature(pattern, slice_pattern)]
+/// use core::pattern::predicate;
+///
+/// let nums = &[10, 40, 30, 40];
+/// assert_eq!(nums.find(predicate(|n| n % 3 == 0)), Some(2));
+/// assert_eq!(nums.find(predicate(|n| n % 2 == 1)), None);
+/// ```
+impl<'hs, T, F: FnMut(&'hs T) -> bool> Pattern<&'hs [T]> for Predicate<F> {
+    type Searcher = PredicateSearcher<'hs, T, F>;
+
+    fn into_searcher(self, haystack: &'hs [T]) -> Self::Searcher {
+        Self::Searcher::new(haystack, self)
+    }
+
+    fn is_contained_in(mut self, haystack: &'hs [T]) -> bool {
+        haystack.iter().any(|element| self.test(element))
+    }
+
+    fn is_prefix_of(mut self, haystack: &'hs [T]) -> bool {
+        haystack.first().filter(|element| self.test(element)).is_some()
+    }
+    fn strip_prefix_of(mut self, haystack: &'hs [T]) -> Option<&'hs [T]> {
+        match haystack.split_first() {
+            Some((first, tail)) if self.test(first) => Some(tail),
+            _ => None,
+        }
+    }
+
+    fn is_suffix_of(mut self, haystack: &'hs [T]) -> bool {
+        haystack.last().filter(|element| self.test(element)).is_some()
+    }
+    fn strip_suffix_of(mut self, haystack: &'hs [T]) -> Option<&'hs [T]> {
+        match haystack.split_last() {
+            Some((last, head)) if self.test(last) => Some(head),
+            _ => None,
+        }
+    }
+}
+
+/// Associated type for `<core::pattern::Predicate as Pattern<&'hs
+/// [T]>>::Searcher`.
+#[derive(Clone, Debug)]
+pub struct PredicateSearcher<'hs, T, F> {
+    haystack: &'hs [T],
+    state: NeedleSearcherState<Predicate<F>>,
+}
+
+impl<'hs, T, F> PredicateSearcher<'hs, T, F> {
+    fn new(haystack: &'hs [T], pred: Predicate<F>) -> Self {
+        let state = NeedleSearcherState::new(haystack.len(), pred);
+        Self { haystack, state }
+    }
+}
+
+unsafe impl<'hs, T, F: FnMut(&'hs T) -> bool> pattern::Searcher<&'hs [T]>
+    for PredicateSearcher<'hs, T, F>
+{
+    fn haystack(&self) -> &'hs [T] {
+        self.haystack
+    }
+
+    fn next(&mut self) -> pattern::SearchStep {
+        self.state.next_fwd(self.haystack)
+    }
+    fn next_match(&mut self) -> Option<(usize, usize)> {
+        self.state.next_fwd::<MatchOnly, _>(self.haystack).0
+    }
+    fn next_reject(&mut self) -> Option<(usize, usize)> {
+        self.state.next_fwd::<RejectOnly, _>(self.haystack).0
+    }
+}
+
+unsafe impl<'hs, T, F: FnMut(&'hs T) -> bool> pattern::ReverseSearcher<&'hs [T]>
+    for PredicateSearcher<'hs, T, F>
+{
+    fn next_back(&mut self) -> pattern::SearchStep {
+        self.state.next_bwd(self.haystack)
+    }
+    fn next_match_back(&mut self) -> Option<(usize, usize)> {
+        self.state.next_bwd::<MatchOnly, _>(self.haystack).0
+    }
+    fn next_reject_back(&mut self) -> Option<(usize, usize)> {
+        self.state.next_bwd::<RejectOnly, _>(self.haystack).0
+    }
+}
+
+impl<'hs, T, F: FnMut(&'hs T) -> bool> pattern::DoubleEndedSearcher<&'hs [T]>
+    for PredicateSearcher<'hs, T, F>
+{
+}
 
 /////////////////////////////////////////////////////////////////////////////
 // Impl Pattern for &[T] and &[T; N]
@@ -513,6 +614,15 @@ impl<'hs, T: PartialEq> Needle<'hs, T> for &[T] {
     }
     fn test(&mut self, slice: &'hs [T]) -> bool {
         *self == slice
+    }
+}
+
+impl<'hs, T: 'hs, F: FnMut(&'hs T) -> bool> Needle<'hs, T> for Predicate<F> {
+    fn len(&self) -> usize {
+        1
+    }
+    fn test(&mut self, slice: &'hs [T]) -> bool {
+        self.test(&slice[0])
     }
 }
 
